@@ -12,6 +12,7 @@ extern int tamanho_global;
 extern int num_procs;
 extern int bytes_por_segmento;
 extern pthread_t thread_leitura, thread_escrita;
+extern pthread_mutex_t mutex_escritor_leitor;
 
 void escreve(char* buffer, int tamanho, int posicao);
 

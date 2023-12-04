@@ -6,6 +6,7 @@ int tamanho_global;
 int num_procs;
 int bytes_por_segmento;
 pthread_t thread_leitura, thread_escrita;
+pthread_mutex_t mutex_escritor_leitor = PTHREAD_MUTEX_INITIALIZER;
 
 void escreve(char* buffer, int tamanho, int posicao){
 	if ((posicao + tamanho) > (tamanho_global)){
@@ -93,10 +94,13 @@ void* escutando_escrita(void* arg){
 		start_position = valores_recebidos[1] % bytes_por_segmento;
 		end_position = start_position + valores_recebidos[0];
 
+		//necessário apenas para a intercalação das thread escrita e leitura
+		pthread_mutex_lock(&mutex_escritor_leitor);
 		for(int i = start_position; i < end_position; i++){
 			segmento_memoria[i] = (char) valores_recebidos[pivot];
 			pivot++;
 		}
+		pthread_mutex_unlock(&mutex_escritor_leitor);
 	}
 }
 
@@ -118,10 +122,12 @@ void* escutando_leitura(void* arg){
 		end_position = start_position + valores_recebidos[0];
 		pivot = 0;
 
+		pthread_mutex_lock(&mutex_escritor_leitor);
 		for (int i = start_position; i < end_position; i++){
 			vetor_resposta[pivot] = segmento_memoria[i];
 			pivot++;
 		}
+		pthread_mutex_unlock(&mutex_escritor_leitor);
 
 		MPI_Send(vetor_resposta, valores_recebidos[0], MPI_INT, message_source, 2, MPI_COMM_WORLD);
 	}
