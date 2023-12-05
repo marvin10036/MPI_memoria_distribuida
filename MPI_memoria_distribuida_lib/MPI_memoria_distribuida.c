@@ -5,7 +5,7 @@ int rank;
 int tamanho_global;
 int num_procs;
 int bytes_por_segmento;
-pthread_t thread_leitura, thread_escrita;
+pthread_t thread_leitura, thread_escrita, thread_no_central;
 pthread_mutex_t mutex_escritor_leitor = PTHREAD_MUTEX_INITIALIZER;
 
 void escreve(char* buffer, int tamanho, int posicao){
@@ -17,6 +17,12 @@ void escreve(char* buffer, int tamanho, int posicao){
 	int ponteiro_buffer = 0;
 	int iterador_posicao = posicao;
 
+	//Requisicao de acesso a mem distribuida. Arquitetura estrela
+	int requisicao = 0;
+	MPI_Send(&requisicao, 1, MPI_INT, 0, 3, MPI_COMM_WORLD);
+	MPI_Recv(&requisicao, 1, MPI_INT, 0, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+	int confirmador_de_escritas;
 	while(ponteiro_buffer <= tamanho - 1){
 		destination_rank = (iterador_posicao/bytes_por_segmento);
 
@@ -36,7 +42,10 @@ void escreve(char* buffer, int tamanho, int posicao){
 			iterador_posicao++;
 		}
 		MPI_Send(vetor_de_argumentos, restante_do_segmento+2, MPI_INT, destination_rank, 1, MPI_COMM_WORLD);
+		MPI_Recv(&requisicao, 1, MPI_INT, destination_rank, 6, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 	}
+	//Esperar confirmação de todas as requisições
+	MPI_Send(&requisicao, 1, MPI_INT, 0, 5, MPI_COMM_WORLD);
 }
 
 void le(char* buffer, int tamanho, int posicao){
@@ -48,6 +57,10 @@ void le(char* buffer, int tamanho, int posicao){
 	int ponteiro_buffer = 0;
 	int iterador_posicao = posicao;
 	int vetor_de_argumentos[2];
+
+	int requisicao = 0;
+	MPI_Send(&requisicao, 1, MPI_INT, 0, 3, MPI_COMM_WORLD);
+	MPI_Recv(&requisicao, 1, MPI_INT, 0, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
 	while(ponteiro_buffer <= tamanho - 1){
 		destination_rank = (iterador_posicao/bytes_por_segmento);
@@ -72,10 +85,13 @@ void le(char* buffer, int tamanho, int posicao){
 			iterador_posicao++;
 		}
 	}
+	//leitura já espera confirmação pelo receive
+	MPI_Send(&requisicao, 1, MPI_INT, 0, 5, MPI_COMM_WORLD);
 }
 
 void* escutando_escrita(void* arg){
 	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS,NULL);
+	int confirmacao_operacao = 1;
 	while(1){
 		MPI_Status status;
 		int tamanho_da_mensagem;
@@ -101,6 +117,7 @@ void* escutando_escrita(void* arg){
 			pivot++;
 		}
 		pthread_mutex_unlock(&mutex_escritor_leitor);
+		MPI_Send(&confirmacao_operacao, 1, MPI_INT, message_source, 6, MPI_COMM_WORLD);
 	}
 }
 
@@ -133,6 +150,22 @@ void* escutando_leitura(void* arg){
 	}
 }
 
+void* no_central(void* arg){
+	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS,NULL);
+	int var = 1;
+	int requisicao, message_source;
+	MPI_Status status;
+	while(1){
+		MPI_Recv(&requisicao, 1, MPI_INT, MPI_ANY_SOURCE, 3, MPI_COMM_WORLD, &status);
+		message_source = status.MPI_SOURCE;
+		printf("primeira requisicao recebida de %d\n", message_source);
+		MPI_Send(&var, 1, MPI_INT, message_source, 4, MPI_COMM_WORLD);
+		MPI_Recv(&requisicao, 1, MPI_INT, message_source, 5, MPI_COMM_WORLD, &status);
+		message_source = status.MPI_SOURCE;
+		printf("finalizacao de requisicao recebida de %d\n", message_source);
+	}
+}
+
 int aloca(int tamanho) {
 	tamanho_global = tamanho;
 
@@ -151,12 +184,15 @@ int aloca(int tamanho) {
 	}
 
 	for (char i = (bytes_por_segmento * rank); i < (bytes_por_segmento * (rank+1)); i++){
-		segmento_memoria[i%bytes_por_segmento] = i;
+		segmento_memoria[i%bytes_por_segmento] = 0;
 	}
 
 	pthread_create(&thread_leitura, NULL, escutando_leitura, NULL);
 	pthread_create(&thread_escrita, NULL, escutando_escrita, NULL);
-
+	//thread do coordenador de mutex
+	if(rank == 0){
+		pthread_create(&thread_no_central, NULL, no_central, NULL);
+	}
 	return 0;
 }
 
